@@ -1,0 +1,160 @@
+
+Stocks-own
+[ 
+  id
+  price
+  fundamental
+  hist-price       ; history price, up to 30 days
+  avg-price10      ; 10 day moving average price
+  avg-price30      
+  yield            ; yield
+  beta-10d
+  beta-30d
+  long-biddings 
+  short-biddings 
+  total-shares 
+  ]
+
+to setup-stocks [stock-num]
+  create-stocks stock-num[
+    set shape "square"
+    set size 3
+    set price 1 + random 9 
+    set hist-price lput price []
+    set yield 0.04
+    set total-shares 1000
+    set long-biddings []
+    set short-biddings []
+    set incoming-queue []
+    ;set hidden? true
+  ]
+  
+  (foreach [who] of stocks ["ETF" "oil-stock" "non-oil-stock" ][ -8 0 8]
+    [
+      ask stock ?1 [
+        set label ?2
+        setxy ?3 10
+        set color yellow
+        ]
+    ])
+
+  ask turtles [ set label-color blue ]
+end
+
+;; Collecting orders
+;; content like ["buy" "sender:6" "content:" [13 1] "receiver:10"]
+;;              [ type-of-bidding price number-of-shares ]
+to collect-bids
+  let msg 0
+  let performative 0
+  while [not empty? incoming-queue]
+  [
+     set msg get-message
+     set performative get-performative msg
+     if performative = "bl"  [execute-long-bidding msg ]
+     if performative = "sl" [execute-short-bidding msg ]
+   ]
+end
+
+;;; records biddings of type in format: ["buy" "sender:9" "content:" [12 1] "receiver:10"]
+to execute-long-bidding [msg]
+  let content get-content msg      ;; [12 1]
+  let bidding-price first content  ;; 12
+  let bidding-volume last content  ;; 1
+  let s get-sender msg  ;; (who number) 10
+  
+  ;; if bidding-price is higher than current market price, trying to maka a deal with existing counterpart biddings
+  while [bidding-price > price and bidding-volume > 0 ]     ;; 
+  [
+    ifelse exist-short-biddings-of-price price
+    [
+      let dealing-volume 0
+      let bid item 1 get-short-bidding price    ;; read a counterpart bidding at price-i like [ 3 12 ]
+      ifelse bidding-volume < first bid    ;; if the bidding could be "swallowed" by this counterpart
+      [ 
+        set dealing-volume bidding-volume
+        ;; after this dealing, remaining short bidding should added back
+        add-short-bidding (list bidding-price (list (bidding-volume - first bid) (last bid) ) )
+        set bidding-volume 0
+      ]
+      [ set dealing-volume first bid 
+        ;; update long bidding order after this dealing           
+        set bidding-volume bidding-volume - dealing-volume        
+      ] 
+      ;; send message to buyer
+      send add-receiver s add-content (list price dealing-volume) create-message "buy-order-executed"
+      ;; send message to seller
+      send add-receiver last bid add-content (list price dealing-volume) create-message "sell-order-executed"
+      set total-dealed-volume total-dealed-volume + dealing-volume
+    ]
+    [ set price price + 0.1   ]  ;; iterator price
+  ]
+
+  ;; counterpart at bidding-price is not exist, then add this order to long-bidding list
+  add-long-bidding (list bidding-price (list bidding-volume s)) 
+  if show_messages? [show (word "add-long-bidding "bidding-volume" shares at price "bidding-price )]
+  ;; [ 1 [ 2 5 ] ]
+end
+
+to execute-short-bidding [msg]
+  let content get-content msg      ;; [12 1]
+  let bidding-price first content  ;; 12
+  let bidding-volume last content  ;; 1
+  let s get-sender msg  ;; (who number) 10
+  
+  ;; if bidding-price is lower than current market price, trying to maka a deal with existing counterpart biddings
+  while [bidding-price < price and bidding-volume > 0.1]     ;; 
+  [
+    ifelse exist-long-biddings-of-price price
+    [
+      let dealing-volume 0
+      let bid item 1 get-long-bidding price    ;; read a counterpart bidding at price-i like [ 3 12 ]
+      ifelse bidding-volume < first bid    ;; if the bidding could be "swallowed" by this counterpart
+      [ 
+        set dealing-volume bidding-volume
+        ;; after this dealing, remaining short bidding should added back
+        add-long-bidding (list bidding-price (list (bidding-volume - first bid) (last bid) ) )
+        set bidding-volume 0
+      ]
+      [ set dealing-volume first bid 
+        ;; update long bidding order after this dealing           
+        set bidding-volume bidding-volume - dealing-volume        
+      ] 
+      ;; send message to buyer
+      send add-receiver s add-content (list price dealing-volume) create-message "buy-order-executed"
+      ;; send message to seller
+      send add-receiver last bid add-content (list price dealing-volume) create-message "sell-order-executed"
+      set total-dealed-volume total-dealed-volume + dealing-volume
+    ]
+    [ set price price - 0.1  
+      ;if price <= 0 [ set price 0.1 ]     
+      ]  ;; iterator price
+  ]
+
+  ;; counterpart at bidding-price is not exist, then add this order to short-bidding list
+  add-short-bidding (list bidding-price (list bidding-volume s)) 
+  if show_messages? [ show (word "add-short-bidding "bidding-volume" shares at price "bidding-price ) ]
+  ;; [ 1 [ 2 5 ] ]
+end
+
+
+to update-stock-price
+  ask stocks [
+    if ticks > 30 [ 
+      set hist-price lput price remove-item 0 hist-price
+      set avg-price30 (sum hist-price) / 30
+      stop
+      ]
+    if ticks > 10 [ 
+      set avg-price10 sum (sublist hist-price (ticks - 11) ticks) / 10
+      stop
+      ]
+    if ticks > 10 [ set avg-price10 sum (sublist hist-price (ticks - 11) ticks ) / 10]
+
+  ;  if ticks > 200 []  
+  ]
+end
+
+
+to make-deal
+end

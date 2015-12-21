@@ -1,0 +1,114 @@
+;;; File to be included in stock_market.nlogo
+;;;
+;;; Bidding modules for "stock market" NetLogo Models
+;;;
+;;; Version 1.0 (2015) Jihe GAO ( jihe.gao@jiejiaotech.com)
+;;; Adapted to NetLogo 5.1 (2015)
+;;;
+;;; Requirements: breeds needed to have following two variables:
+;;; breeds-own [ long-biddings short-biddings ]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;; long-biddingS
+;; There is nothing magical about biddings: they are simply items 
+;; of a specific list. Check list processing in NetLogo. However
+;; here are some usefull procedures. 
+
+;;; creates a new bidding. (does not stores it in bidding memory).
+to-report create-bidding [b-price content]
+  report (list b-price content)
+end 
+
+;;; reports type of a bidding.
+to-report get-bidding-price [bel]
+  report first bel
+end
+
+;; reports the content of bidding
+to-report bidding-content [bel]
+  report item 1 bel
+end
+
+;; Adding information to the biddings structure
+to add-long-bidding [bel]
+  if member? bel long-biddings [stop]
+  set long-biddings fput bel long-biddings 
+end 
+;; Removing a bidding from the list of biddings. 
+to remove-long-bidding [bel]
+ set long-biddings remove bel long-biddings 
+end 
+
+;; Adding information to the biddings structure
+to add-short-bidding [bel]
+  if member? bel short-biddings [stop]
+  set short-biddings fput bel short-biddings 
+end 
+;; Removing a bidding from the list of biddings. 
+to remove-short-bidding [bel]
+ set short-biddings remove bel short-biddings 
+end 
+ 
+;;; return true if a specific bidding belong to the set of biddings
+to-report exists-long-bidding [bel]
+   ifelse member? bel long-biddings [report true] [report false]
+end
+;;; Reports true if a bidding in the form of ["b-type" etc etc etc ...] exist in biddings list
+to-report exist-long-biddings-of-price [b-price]
+  let blfs filter [first ? = b-price] long-biddings
+  ifelse empty? blfs [report false] [report true]
+end
+
+;;; return true if a specific bidding belong to the set of biddings
+to-report exists-short-bidding [bel]
+   ifelse member? bel short-biddings [report true] [report false]
+end
+;;; Reports true if a bidding in the form of ["b-type" etc etc etc ...] exist in biddings list
+to-report exist-short-biddings-of-price [b-price]
+  let blfs filter [first ? = b-price] short-biddings
+  ifelse empty? blfs [report false] [report true]
+end
+
+;;; Returns all biddings of b-type in a list
+to-report long-biddings-of-price [b-price]
+  report filter [first ? = b-price] long-biddings
+end
+
+;;; Returns all biddings of b-type in a list
+to-report short-biddings-of-price [b-price]
+  report filter [first ? = b-price] short-biddings
+end
+
+;;; Returns the first bidding of a certain type and removes it
+to-report get-long-bidding [b-price]
+  ifelse exist-long-biddings-of-price b-price 
+  [let bel first filter [first ? = b-price] long-biddings
+   remove-long-bidding bel
+   report bel
+  ]
+  [report false]
+end
+to-report get-short-bidding [b-price]
+  ifelse exist-short-biddings-of-price b-price 
+  [let bel first filter [first ? = b-price] short-biddings
+   remove-short-bidding bel
+   report bel
+  ]
+  [report false]
+end
+
+to-report read-first-long-bidding-of-price [b-price]
+   report first long-biddings-of-price b-price
+end 
+to-report read-first-short-bidding-of-price [b-price]
+   report first short-biddings-of-price b-price
+end 
+
+;to update-long-bidding [bel]
+;   remove-long-bidding read-first-long-bidding-of-price get-first-long-bidding-price bel
+;   add-long-bidding bel
+;end
+;to update-short-bidding [bel]
+;   remove-short-bidding read-first-short-bidding-of-price get-first-short-bidding-price bel
+;   add-short-bidding bel
+;end
