@@ -1,4 +1,5 @@
 
+
 Stocks-own
 [ 
   id
@@ -29,7 +30,7 @@ to setup-stocks [stock-num]
     ;set hidden? true
   ]
   
-  (foreach [who] of stocks ["ETF" "oil-stock" "non-oil-stock" ][ -8 0 8]
+  (foreach [who] of stocks ( sublist stock-label-list 0 (count stocks ) )  ( sublist stock-xcor-list 0 (count stocks ) )
     [
       ask stock ?1 [
         set label ?2

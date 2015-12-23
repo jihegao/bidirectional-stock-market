@@ -15,7 +15,7 @@ breed [Investors investor]
 
 __includes ["communication.nls" "bidding.nls" "stockexchange.nls"]
 
-globals [ global-wealth total-dealed-volume initial-wealth-distribution]
+globals [ global-wealth total-dealed-volume initial-wealth-distribution stock-label-list stock-xcor-list]
 
 turtles-own [incoming-queue]
 
@@ -30,8 +30,11 @@ Investors-own [
 
 to setup
   clear-all
+  
+  set stock-label-list ["ETF" "oil-stock" "non-oil-stock" "stock4" "stock5" "stock6" "stock7" "stock8" ]
+  set stock-xcor-list[ -8 0 8 9 10 11 12 13 14]
 
-  setup-stocks 3
+  setup-stocks num-stocks
   
   ask patches [set pcolor black]
   set-default-shape turtles "Person"
@@ -41,7 +44,8 @@ to setup
     set personality ""
     set color blue
     set incoming-queue []
-    set expectations (list random 10 random 10 random 10)
+    let random-10-list (list random 10 random 10 random 10 random 10 random 10 random 10 random 10 random 10)
+    set expectations sublist random-10-list 0 (count stocks) 
     update-expectations
     ]
   
@@ -51,8 +55,9 @@ to setup
   ;;
   ask investors [ 
     allocate-money 
-    set portfolio (list random 3 random 3 random 3)
-    set portfolio-adj (list 0 0 0)
+    let random-10-list (list random 10 random 10 random 10 random 10 random 10 random 10 random 10 random 10)
+    set portfolio sublist random-10-list 0 (count stocks) 
+    set portfolio-adj map [? * 0] portfolio
     ]
 
   reset-ticks
@@ -256,9 +261,11 @@ true
 false
 "" ""
 PENS
-"default" 1.0 0 -8053223 true "" "plot [price] of stock 0"
-"pen-1" 1.0 0 -15582384 true "" "plot [price] of stock 1"
-"pen-2" 1.0 0 -955883 true "" "plot [price] of stock 2"
+"default" 1.0 0 -8053223 true "" "plot [price] of first (sort-on [who] stocks)"
+"pen-1" 1.0 0 -955883 true "" "if count stocks > 1 [plot [price] of item 1 (sort-on [who] stocks)]"
+"pen-2" 1.0 0 -14454117 true "" "if count stocks > 2 [plot [price] of item 2 (sort-on [who] stocks)]"
+"pen-3" 1.0 0 -7500403 true "" "if count stocks > 3 [plot [price] of item 3 (sort-on [who] stocks)]"
+"pen-4" 1.0 0 -2674135 true "" "if count stocks > 4 [plot [price] of item 4 (sort-on [who] stocks)]"
 
 PLOT
 587
@@ -372,6 +379,21 @@ OUTPUT
 1181
 389
 12
+
+SLIDER
+9
+214
+181
+247
+num-stocks
+num-stocks
+1
+8
+3
+1
+1
+NIL
+HORIZONTAL
 
 @#$#@#$#@
 ## Where I can find more information?
