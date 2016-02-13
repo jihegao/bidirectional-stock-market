@@ -1,103 +1,137 @@
-
+globals [
+  market-mean-yield
+  market-max-yield
+]
 
 Stocks-own
-[ 
+[
   id
   price
-  fundamental
-  hist-price       ; history price, up to 30 days
-  avg-price10      ; 10 day moving average price
-  avg-price30      
+  ;price0          ; the very first price
+  fundamental      ; internal value
+  hist-price       ; historical price
+  d-table          ; a data table used by stats extention
+  
+  ma_5             ; 5 day moving average price
+  ma_10  
+  ma_20      
+  ma_80     
   yield            ; yield
-  beta-10d
-  beta-30d
-  long-biddings 
-  short-biddings 
-  total-shares 
-  ]
+  dealed-volume    ; #-of dealed shares for each tick
+  
+  p_lin_5          ; predict price 5 ticks afterward based on linear regression
+  ;p_lin_10         ; stats:forecast-linear-growth-at stats-table variable T
+  p_com_5          ; stats:forecast-compound-growth-at stats-table variable T
+  ;p_com_10         ;
+  sd               ; standard deviation
+  alpha            ;
+  beta             ;
+  sharp            ;
+  long-orders
+  short-orders
+  total-shares
+]
+
 
 to setup-stocks [stock-num]
-  create-stocks stock-num[
+  
+  set market-mean-yield 0
+  set market-max-yield 0 
+  
+  create-stocks stock-num [
     set shape "square"
-    set size 3
+    set size 2
     set price 1 + random 9 
+;    set price0 price
     set hist-price lput price []
-    set yield 0.04
-    set total-shares 1000
-    set long-biddings []
-    set short-biddings []
+    set dealed-volume 0
+    set d-table stats:newtable
+    stats:set-names d-table           ["price" "ma_5" "ma_10" "ma_20" "ma_80" "yield" "dealed-volume" "l-buy" "l-sell" "p_lin_5" "p_com_5" "sd"]  
+    repeat 2 [stats:add d-table  (list  price price  price   price   price      0               0         0      0       price    price      0 )]
+    stats:use-most-recent d-table 100      ; only calculate recent 100-ticks data
+    
+    set total-shares 1000  ;
+    set long-orders []
+    set short-orders []
     set incoming-queue []
     ;set hidden? true
   ]
   
   (foreach [who] of stocks ( sublist stock-label-list 0 (count stocks ) )  ( sublist stock-xcor-list 0 (count stocks ) )
     [
-      ask stock ?1 [
+      ask stock ?1 
+      [
         set label ?2
-        setxy ?3 10
-        set color yellow
-        ]
-    ])
+        setxy ?3 0
+        ;set color yellow
+      ]
+  ])
 
-  ask turtles [ set label-color blue ]
+;  ask turtles [ set label-color blue ]
 end
 
 ;; Collecting orders
-;; content like ["buy" "sender:6" "content:" [13 1] "receiver:10"]
-;;              [ type-of-bidding price number-of-shares ]
-to collect-bids
+;; content like [ "buy"          "sender:6"          "content:" [13 1]              "receiver:10"  ]
+;;              [ type-of-bidding sender -investor   [price number-of-shares]     receiver - stock ID ]
+to collect-bids-and-make-deal
+
+  set dealed-volume 0  
   let msg 0
   let performative 0
+
   while [not empty? incoming-queue]
   [
      set msg get-message
      set performative get-performative msg
-     if performative = "bl"  [execute-long-bidding msg ]
-     if performative = "sl" [execute-short-bidding msg ]
+     if performative = "bl"  [execute-long-order msg ]
+     if performative = "sl" [execute-short-order msg ]
    ]
 end
 
 ;;; records biddings of type in format: ["buy" "sender:9" "content:" [12 1] "receiver:10"]
-to execute-long-bidding [msg]
+to execute-long-order [msg]
   let content get-content msg      ;; [12 1]
   let bidding-price first content  ;; 12
   let bidding-volume last content  ;; 1
-  let s get-sender msg  ;; (who number) 10
-  
+  let s get-sender msg             ;; (who number) 10
+
   ;; if bidding-price is higher than current market price, trying to maka a deal with existing counterpart biddings
   while [bidding-price > price and bidding-volume > 0 ]     ;; 
   [
-    ifelse exist-short-biddings-of-price price
+    let dealing-volume 0
+    ifelse exist-short-orders-of-price price
     [
-      let dealing-volume 0
       let bid item 1 get-short-bidding price    ;; read a counterpart bidding at price-i like [ 3 12 ]
-      ifelse bidding-volume < first bid    ;; if the bidding could be "swallowed" by this counterpart
+      ifelse bidding-volume < first bid         ;; if the current bidding could be "swallowed" by this counterpart
       [ 
         set dealing-volume bidding-volume
         ;; after this dealing, remaining short bidding should added back
         add-short-bidding (list bidding-price (list (bidding-volume - first bid) (last bid) ) )
         set bidding-volume 0
       ]
-      [ set dealing-volume first bid 
+      [
+        set dealing-volume first bid 
         ;; update long bidding order after this dealing           
-        set bidding-volume bidding-volume - dealing-volume        
+        set bidding-volume bidding-volume - dealing-volume      
       ] 
       ;; send message to buyer
       send add-receiver s add-content (list price dealing-volume) create-message "buy-order-executed"
       ;; send message to seller
       send add-receiver last bid add-content (list price dealing-volume) create-message "sell-order-executed"
-      set total-dealed-volume total-dealed-volume + dealing-volume
+      set dealed-volume dealed-volume + dealing-volume
     ]
     [ set price price + 0.1   ]  ;; iterator price
   ]
 
   ;; counterpart at bidding-price is not exist, then add this order to long-bidding list
-  add-long-bidding (list bidding-price (list bidding-volume s)) 
-  if show_messages? [show (word "add-long-bidding "bidding-volume" shares at price "bidding-price )]
-  ;; [ 1 [ 2 5 ] ]
+  if bidding-volume > 0 [
+    add-long-bidding (list bidding-price (list bidding-volume s)) 
+    if show_messages? [show (word "add-long-bidding "bidding-volume" shares at price "bidding-price )]
+    ;; [ 1 [ 2 5 ] ]
+  ]
 end
 
-to execute-short-bidding [msg]
+to execute-short-order [msg]
   let content get-content msg      ;; [12 1]
   let bidding-price first content  ;; 12
   let bidding-volume last content  ;; 1
@@ -106,9 +140,9 @@ to execute-short-bidding [msg]
   ;; if bidding-price is lower than current market price, trying to maka a deal with existing counterpart biddings
   while [bidding-price < price and bidding-volume > 0.1]     ;; 
   [
-    ifelse exist-long-biddings-of-price price
+    let dealing-volume 0
+    ifelse exist-long-orders-of-price price
     [
-      let dealing-volume 0
       let bid item 1 get-long-bidding price    ;; read a counterpart bidding at price-i like [ 3 12 ]
       ifelse bidding-volume < first bid    ;; if the bidding could be "swallowed" by this counterpart
       [ 
@@ -125,7 +159,7 @@ to execute-short-bidding [msg]
       send add-receiver s add-content (list price dealing-volume) create-message "buy-order-executed"
       ;; send message to seller
       send add-receiver last bid add-content (list price dealing-volume) create-message "sell-order-executed"
-      set total-dealed-volume total-dealed-volume + dealing-volume
+      set dealed-volume dealed-volume + dealing-volume
     ]
     [ set price price - 0.1  
       ;if price <= 0 [ set price 0.1 ]     
@@ -133,29 +167,34 @@ to execute-short-bidding [msg]
   ]
 
   ;; counterpart at bidding-price is not exist, then add this order to short-bidding list
-  add-short-bidding (list bidding-price (list bidding-volume s)) 
-  if show_messages? [ show (word "add-short-bidding "bidding-volume" shares at price "bidding-price ) ]
-  ;; [ 1 [ 2 5 ] ]
-end
-
-
-to update-stock-price
-  ask stocks [
-    if ticks > 30 [ 
-      set hist-price lput price remove-item 0 hist-price
-      set avg-price30 (sum hist-price) / 30
-      stop
-      ]
-    if ticks > 10 [ 
-      set avg-price10 sum (sublist hist-price (ticks - 11) ticks) / 10
-      stop
-      ]
-    if ticks > 10 [ set avg-price10 sum (sublist hist-price (ticks - 11) ticks ) / 10]
-
-  ;  if ticks > 200 []  
+  if bidding-volume > 0 [
+    add-short-bidding (list bidding-price (list bidding-volume s)) 
+    if show_messages? [ show (word "add-short-bidding "bidding-volume" shares at price "bidding-price ) ]
+    ;; [ 1 [ 2 5 ] ]
   ]
 end
 
 
-to make-deal
+to update-stock-price
+
+    set hist-price lput price hist-price
+;    if ticks > 1000 [ set hist-price lput price remove-item 0 hist-price ] ; only save 1000 ticks data
+    ifelse ticks > 100 [ set ma_80 sum (sublist hist-price (ticks - 100) ticks) / 100  ][ set ma_80 0 ]
+    ifelse ticks > 20  [ set ma_20 sum (sublist hist-price (ticks - 20) ticks) / 20 ] [ set ma_20 0 ]
+    ifelse ticks > 10  [ set ma_10 sum (sublist hist-price (ticks - 10) ticks) / 10 ][ set ma_10 0 ]
+    ifelse ticks > 5   [ set ma_5 sum (sublist hist-price (ticks - 5) ticks) / 5 ][ set ma_5 0 ]
+
+    set yield price / first hist-price
+    
+    set p_lin_5 stats:forecast-linear-growth-at d-table "price" 5
+    set p_com_5 stats:forecast-compound-growth-at d-table "price" 5
+    set sd standard-deviation stats:get-observations d-table "sd"
+        
+    ;                   ["price" "ma_5" "ma_10" "ma_20" "ma_80" "yield" "dealed-volume" "l-buy" "l-sell" "p_lin_5" "p_com_5" "sd"]  
+    stats:add d-table (list price ma_5   ma_10   ma_20   ma_80   yield   dealed-volume   length long-orders length short-orders p_lin_5 p_com_5  sd )
+end
+
+to update-market-yield
+  set market-mean-yield mean (map [ [price] of ? / ( first [hist-price] of ?) * [total-shares] of ?] sort stocks)
+  set market-max-yield   max (map [ [price] of ? / ( first [hist-price] of ?) * [total-shares] of ?] sort stocks)
 end

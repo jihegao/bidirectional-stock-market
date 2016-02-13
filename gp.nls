@@ -1,0 +1,652 @@
+breed [ codeturtles codeturtle ]
+
+
+globals
+[
+  TYPE_COMMANDBLOCK
+  TYPE_COMMAND
+  TYPE_OPERATOR
+  TYPE_REPORTER
+
+  RTYPE_ANY        ; used for functions like "tree-count-nodes", to match any node return type
+  RTYPE_VOIDBLOCK
+  RTYPE_VOID
+  RTYPE_NUMERIC
+  RTYPE_BOOLEAN
+
+  gp-syntaxlist-void
+  gp-syntaxlist-numeric
+  gp-syntaxlist-boolean
+
+  gp-randseed
+  gp-generation
+  gp-best-fitness-this-gen
+  ;; add your own global variables here...
+  
+  gp-current-stock
+  strategy_1
+  train-hist-price
+  test-hist-price
+  
+]
+
+codeturtles-own
+[
+  gp-codetree
+  gp-compiledcode
+  gp-fitness
+  gp-raw-fitness
+
+  ;; add your own codeturtle variables here
+  expectation 
+
+  t-back-test   ; the time period to run back test
+  t-real-test   ; the tiem period to run real-time test
+  
+]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                   START OF GP LIBRARY CODE                         ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; IMPORTANT:  To create your own genetic programming model, you shouldn't need to
+;;    modify any of the GP Library Code.  Instead, you should just change the
+;;    following procedures, which are found after the end of the gp library section:
+;;      gpuser-setup-syntax    (determines the ingredients for randomlly generated code trees)
+;;      gpuser-run-codeturtles  (determines what happens to the codeturtles during a generation)
+;;      gpuser-initialize-codeturtle  (run when each codeturtle that is created, sets initial variables, etc)
+;;      gpuser-calculate-raw-fitness   (reports some measure analogous to "distance to goal", where 0 is perfection)
+;;      gpuser-calculate-adjusted-fitness (reports a value between 0 and 1, where 1 is perfection)
+;;
+;;   In addition, your setup should call "gp-setup" and your go should call "gp-go"
+;;
+;; Notes
+;;
+;;  Structure of a tree node:
+;;    ["NODE_VALUE"  RTYPE_*  TYPE_*  CHILD1  CHILD2  ... ]
+;;
+
+to gp-setup
+  ;; these are just constants -- they could just as easily be set to unique integers
+  ;; however, making them abbreviated strings makes debugging easer.
+  set TYPE_COMMANDBLOCK "cb"
+  set TYPE_COMMAND "c"
+  set TYPE_OPERATOR "o"
+  set TYPE_REPORTER "r"
+
+  set RTYPE_ANY ""
+  set RTYPE_VOIDBLOCK "vb"
+  set RTYPE_VOID "v"
+  set RTYPE_NUMERIC "n"
+  set RTYPE_BOOLEAN "b"
+
+  gpuser-setup-syntax
+
+  set gp-randseed randomseed
+  if (fix-random-seed?)
+  [ random-seed gp-randseed ]
+
+
+  create-codeturtles population-size [
+    set gp-codetree (gp-tree-random RTYPE_VOIDBLOCK initial-code-max-depth branch-chance)
+    set gp-compiledcode (gp-tree-compile gp-codetree)
+    gpuser-initialize-codeturtle
+    gp-calculate-fitness
+  ]
+end
+
+
+;; reports the sum of the weights from a weighted list...
+to-report gp-weight-sum-from-weighted-list [ thelist onlyterminals? ]
+  let thesum 0
+  foreach thelist
+  [
+    if (not onlyterminals? or (length ? <= 3))
+      [ set thesum (thesum + (last ?)) ]
+  ]
+  report thesum
+end
+
+;; reports a random entry from a syntaxlist, where the chance of an entry being chosen
+;;  is weighted by the number that is the last entry of the element
+;;  if onlyterminals is true, then it only chooses from terminals
+to-report gp-random-from-weighted-list [ thelist thesum onlyterminals?]
+
+  if (thesum <= 0) ;; if it can't find any terminals in the list, then choose a random nonterminal
+  [
+    if-else (onlyterminals?)
+    [ report (gp-random-from-weighted-list thelist (gp-weight-sum-from-weighted-list thelist false) false) ]
+    [ report [] ]
+  ]
+
+  let choice (random-float thesum)
+  let partsum 0
+  foreach thelist
+  [
+    if (not onlyterminals? or (length ? <= 3))
+      [ set partsum (partsum + (last ?)) ]
+    if (partsum >= choice)
+       [ report ? ]
+  ]
+end
+
+;; creates a random code tree
+;; -- used to generate the initial population, and to create mutations
+to-report gp-tree-random [node_rtype depthlimit branch_chance ]
+  if (node_rtype = RTYPE_VOIDBLOCK)
+  [
+    if (depthlimit <= 1)
+      [ report (list "[]" RTYPE_VOIDBLOCK TYPE_COMMANDBLOCK) ]
+    if (depthlimit <= 3)
+      [ set branch_chance 0 ]
+    ifelse (random-float 1.0 < branch_chance)
+    [
+      report (sentence (list "[]" RTYPE_VOIDBLOCK TYPE_COMMANDBLOCK )
+        (n-values 2 [ (gp-tree-random RTYPE_VOIDBLOCK (depthlimit - 1) (branch_chance * .90)) ]))
+    ]
+    [
+      report (sentence (list "[]" RTYPE_VOIDBLOCK TYPE_COMMANDBLOCK )
+        (n-values 3 [ (gp-tree-random RTYPE_VOID (depthlimit - 1) (branch_chance * .90)) ]))
+    ]
+  ]
+
+  let syntaxlist []
+
+  ifelse (node_rtype = RTYPE_VOID)
+  [  set syntaxlist gp-syntaxlist-void ]
+  [ifelse (node_rtype = RTYPE_NUMERIC)
+  [  set syntaxlist gp-syntaxlist-numeric ]
+  [if (node_rtype = RTYPE_BOOLEAN)
+  [  set syntaxlist gp-syntaxlist-boolean ]]]
+  let onlyterminals? false
+  if (depthlimit <= 1 or branch_chance < .01 )
+    [ set onlyterminals? true ]
+  let lRecord (gp-random-from-weighted-list syntaxlist (gp-weight-sum-from-weighted-list syntaxlist onlyterminals?) onlyterminals?)
+
+  report (sentence (list (item 0 lRecord) node_rtype (item 1 lRecord))
+    (n-values (length lRecord - 3) [ (gp-tree-random (item (? + 2) lRecord) (depthlimit - 1) branch_chance) ]))
+
+end
+
+;; recursive routine to compile a codetree into valid netlogo code that can be run.
+to-report gp-tree-compile-rec [ tree parenttype indent]
+  let node_type (item 2 tree)
+  if (length tree <= 3)
+  [
+    ifelse (node_type = TYPE_COMMANDBLOCK and parenttype = TYPE_COMMANDBLOCK)
+     [ report "" ]
+     [ report (item 0 tree) ]
+  ]
+  ifelse (node_type = TYPE_OPERATOR)
+  [
+    report (word "(" gp-tree-compile-rec (item 3 tree) node_type (indent + 1) " " item 0 tree " "
+               gp-tree-compile-rec (item 4 tree) node_type (indent + 1) ")")
+  ][
+  ifelse (node_type = TYPE_REPORTER)
+  [
+    report (word "(" (item 0 tree) " " (reduce [ (word ?1 " " ?2) ] (map [gp-tree-compile-rec ? node_type (indent + 1)] (sublist tree 3 (length tree)))) ")")
+  ][
+  ifelse (node_type = TYPE_COMMAND)
+  [
+    report (word (item 0 tree) " " (reduce [ (word ?1 " " ?2) ] (map [gp-tree-compile-rec ? node_type (indent + 1)] (sublist tree 3 (length tree)))) " ")
+  ][
+  ifelse (node_type = TYPE_COMMANDBLOCK)
+  [
+    let indentstr "" ;; how far to indent the code, as a result of nested blocks.
+    if (parenttype = TYPE_COMMANDBLOCK)
+      [ set indent (indent - 1) ]
+    if (indent > 0)
+      [ set indentstr (reduce [ (word ?1 ?2) ] (n-values indent [ " " ])) ]
+    let compiledargs (map [gp-tree-compile-rec ? node_type (indent + 1) ] (sublist tree 3 (length tree)))
+    ifelse (parenttype = TYPE_COMMANDBLOCK)
+    [ report (reduce [ (word ?1 "\n" indentstr ?2) ] compiledargs) ]
+    [ report (word "[\n" indentstr (reduce [ (word ?1 "\n" indentstr ?2) ] compiledargs) "\n" indentstr "]") ]
+  ][
+    report []
+  ]]]]
+
+end
+
+;; routine to compile a codetree into valid netlogo code that can be run.
+to-report gp-tree-compile [ tree ]
+  report gp-tree-compile-rec tree TYPE_COMMANDBLOCK 0
+end
+
+;; reports the number of nodes (with a given RTYPE) in a code tree
+to-report gp-tree-count-nodes [ tree rtype-filter ]
+  let childcount 0
+  if (length tree > 3) ; if node has children
+    [ set childcount (reduce [ ?1 + ?2 ] (map [gp-tree-count-nodes ? rtype-filter] (sublist tree 3 (length tree)))) ]
+  report childcount + (ifelse-value (rtype-filter = RTYPE_ANY or rtype-filter = (item 1 tree)) [ 1 ] [ 0 ])
+end
+
+;; recursive routine to report a chosen (choice) node of a given RTYPE from a code tree
+to-report gp-tree-getnode-rec [ tree choice rtype-filter counter]
+  if (rtype-filter = RTYPE_ANY or rtype-filter = (item 1 tree))
+  [
+    if (counter = choice)
+      [ report (list tree (counter + 1)) ]
+    set counter counter + 1
+  ]
+
+  if (length tree <= 3) ; terminal
+    [ report (list [] counter) ]
+
+  let pair []
+  let mysublist (sublist tree 3 (length tree))
+  let n 0
+  while [ n < length mysublist ]
+  [
+    set pair (gp-tree-getnode-rec (item n mysublist) choice rtype-filter counter)
+    set counter (item 1 pair)
+    if (counter > choice)
+      [ report pair ]
+    set n (n + 1)
+  ]
+  report (list [] counter)
+end
+
+;; routine to report a chosen (choice) node of a given RTYPE from a code tree
+to-report gp-tree-getnode [ tree choice rtype-filter]
+  report (item 0 (gp-tree-getnode-rec tree choice rtype-filter 0))
+end
+
+;; recursive routine that replaces a chosen node with a given subtree, and reports the resulting tree
+to-report gp-tree-replacenode-rec [ tree choice subtree rtype-filter counter ]
+  if (rtype-filter = RTYPE_ANY or rtype-filter = (item 1 tree))
+  [
+    if (counter = choice)
+      [ report (list subtree (counter + 1)) ]
+    set counter counter + 1
+  ]
+
+  if (length tree <= 3) ; terminal
+    [ report (list tree counter) ]
+
+  let resulttree (sublist tree 0 3)
+  let pair []
+  let mysublist (sublist tree 3 (length tree))
+  let n 0
+  while [ n < length mysublist ]
+  [
+    set pair (gp-tree-replacenode-rec (item n mysublist) choice subtree rtype-filter counter)
+    set counter (item 1 pair)
+    set resulttree (lput (item 0 pair) resulttree)
+    set n (n + 1)
+  ]
+
+  report (list resulttree counter)
+end
+
+;; routine that replaces a chosen node with a given subtree, and reports the resulting tree
+to-report gp-tree-replacenode [ tree choice subtree rtype-filter]
+  report (item 0 (gp-tree-replacenode-rec tree choice subtree rtype-filter 0))
+end
+
+;; recursive routine that reports a mutated version of a code tree
+to-report gp-tree-mutate-rec [ tree choice counter ]
+  if (counter = choice)
+    [ report (list (gp-tree-random (item 1 tree) (initial-code-max-depth * .50) (branch-chance * .75)) counter) ]
+
+  if (length tree <= 3) ; terminal
+    [ report (list tree counter)]
+
+  let resulttree (sublist tree 0 3)
+  let pair []
+  let mysublist (sublist tree 3 (length tree))
+  let n 0
+  while [ n < length mysublist ]
+  [
+    set pair (gp-tree-mutate-rec (item n mysublist) choice (counter + 1))
+    set counter (item 1 pair)
+    set resulttree (lput (item 0 pair) resulttree)
+    set n (n + 1)
+  ]
+
+  report (list resulttree counter)
+end
+
+;; routine that reports a mutated version of a code tree
+to-report gp-tree-mutate [ tree ]
+  let choice random (gp-tree-count-nodes tree RTYPE_ANY)
+  report (item 0 (gp-tree-mutate-rec tree choice 0))
+end
+
+;; routine that reports a new tree, generated by crossing tree1 with tree2
+to-report gp-tree-crossover [ tree1 tree2 ]
+  let choice random (gp-tree-count-nodes tree1 RTYPE_ANY)
+  let subtree (gp-tree-getnode tree1 choice RTYPE_ANY)
+ ;;debug;; print "choice=" + choice + " subt=" + subtree
+  let num-attach-points (gp-tree-count-nodes tree2 (item 1 subtree))
+  if (num-attach-points <= 0)
+    [ report tree2 ]
+  let attach-choice random num-attach-points
+  report (gp-tree-replacenode tree2 attach-choice subtree (item 1 subtree))
+end
+
+
+;; routine that creates a new codetree, given all of the code from the
+to gp-breed-new-codeturtle [ lastgenlist weightsum ]
+  let gen-op-choice random-float (clone-chance + mutate-chance + crossover-chance)
+
+  let ct1 (first (gp-random-from-weighted-list lastgenlist weightsum false))
+
+  ifelse (gen-op-choice < clone-chance)
+  [
+    create-codeturtles 1 [
+      gpuser-initialize-codeturtle
+      set gp-codetree ([gp-codetree] of ct1)
+      set gp-compiledcode ([gp-compiledcode] of ct1)
+      set color [color] of ct1
+      ]
+  ][
+  ifelse (gen-op-choice < clone-chance + mutate-chance)
+  [
+    create-codeturtles 1 [
+      gpuser-initialize-codeturtle
+      set gp-codetree (gp-tree-mutate ([gp-codetree] of ct1))
+      set gp-compiledcode (gp-tree-compile gp-codetree)
+      ;;set color color-of ct1
+      ]
+  ][
+    ;; otherwise, do crossover
+    let ct2 (first (gp-random-from-weighted-list lastgenlist weightsum false))
+
+    create-codeturtles 1 [
+      gpuser-initialize-codeturtle
+      set gp-codetree (gp-tree-crossover ([gp-codetree] of ct1) ([gp-codetree] of ct2))
+      set gp-compiledcode (gp-tree-compile gp-codetree)
+      let rgbvector (map [ (?1 + ?2) / 2 ] (extract-rgb ([color] of ct1)) (extract-rgb ([color] of ct2)))
+      set color approximate-rgb (item 0 rgbvector) (item 1 rgbvector) (item 2 rgbvector)
+    ]
+  ]]
+end
+
+;; routine that creates a new generation of codeturtles
+to gp-create-next-generation
+  set gp-generation (gp-generation + 1)
+ ;; ask codeturtles [ gp-calculate-fitness ]
+  let lastgenlist [ (list self gp-fitness) ] of codeturtles
+  let popsize (count codeturtles)
+  let weightsum (gp-weight-sum-from-weighted-list lastgenlist false)
+
+  repeat popsize
+  [
+    gp-breed-new-codeturtle lastgenlist weightsum
+  ]
+
+  foreach lastgenlist
+  [
+    ask first ? [ die ]
+  ]
+
+end
+
+;; This is the main "go" procedure for the gp-library.
+;;   Run iteratively, this procedure performs genetic programming.
+to gp-go
+
+  if (fix-random-seed?)
+  [
+    set gp-randseed gp-randseed + 1
+    random-seed gp-randseed
+  ]
+
+  gp-create-next-generation
+  gpuser-run-codeturtles
+
+  ask codeturtles [ gp-calculate-fitness ]
+  gp-plot
+end
+
+;; plot the fitnesses of the current generation, and update the gp-best-fitness-this-gen variable
+to gp-plot
+  let fitnesslist [ gp-raw-fitness ] of codeturtles
+  let bestfitness min fitnesslist
+  let avgfitness mean fitnesslist
+  let worstfitness max fitnesslist
+  set gp-best-fitness-this-gen bestfitness
+
+  set-current-plot "Fitness Plot"
+  set-current-plot-pen "avg"
+  plot avgfitness
+  set-current-plot-pen "best"
+  plot bestfitness
+  set-current-plot-pen "worst"
+  plot worstfitness
+end
+
+;; show the behavior of the last generation of codeturtles again
+to gp-replay
+
+  ask codeturtles
+  [
+    let savetree gp-codetree
+    let savecompiled gp-compiledcode
+    let savecolor color
+    pu
+    gpuser-initialize-codeturtle
+    set gp-codetree savetree
+    set gp-compiledcode savecompiled
+    set color savecolor
+  ]
+
+  if (fix-random-seed?)
+  [ random-seed gp-randseed ]
+
+  gpuser-run-codeturtles
+
+  ask codeturtles [ gp-calculate-fitness ]
+end
+
+;; displays the code of the best-this-gen codeturtle in the output box
+to gp-showbest
+  clear-output
+  ask one-of (codeturtles with-min [ gp-raw-fitness ])
+  [
+    output-print gp-compiledcode
+  ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                    END OF GP LIBRARY CODE                          ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; These are codeturtle procedures and reporters, that help form the DNA of the codeturtles.
+;; (See the gp-setup-syntax procedure below for exactly what the DNA is made of.)
+;;
+to-report moving-average-cross
+  let r 0
+  let p last [hist-price] of gp-current-stock
+  ;; pp10 represent the price 10 ticks early
+  let pp10 item (length [hist-price] of gp-current-stock - 1) [hist-price] of gp-current-stock
+  ;; ap10 represent the 10-tick-moving-average price
+  let ap10 last [ma_10] of gp-current-stock
+  
+  if (p > pp10) and ( ap10 - p < 0.1 ) [ report 1 ]  ; gold-cross
+  if (p < pp10) and ( ap10 - p < 0.1 ) [ report -1 ]  ; dead-cross
+  report 0
+end
+
+to do-expectation-calc [ input1 input2 input3 input4 input5 ]
+  report (list input1 input2 input3 input4)
+end
+
+to bullish [p]
+  set expectation expectation + p
+end
+
+to bearish [p]
+  set expectation expectation - p
+end
+
+
+;["price" "ma_5" "ma_10" "ma_20" "ma_80" "yield" "dealed-volume" "l-buy" "l-sell" "p_lin_5" "p_com_5" "sd"]  
+;   1     2       3      4         5       6       7               8        9        10        11       12    
+to-report stock-price [prev]
+  report [ item 0 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-ma_5 [prev]
+  report [ item 1 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks] of gp-current-stock
+end
+to-report stock-ma_10 [prev]
+  report [item 2 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-ma_20 [prev]
+  report [item 3 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-ma_80 [prev]
+  report [item 4 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-yield [prev]
+  report [item 5 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-dealed-volume [prev]
+  report [item 6 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-l-buy [prev]
+  report [item 7 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-l-sell [prev]
+  report [item 8 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-p_lin_5 [prev]
+  report [item 9 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-p_com_5 [prev]
+  report [item 10 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+to-report stock-sd [prev]
+  report [item 11 item (ticks - 10 - prev) stats:get-data-as-list [d-table] of one-of stocks ] of gp-current-stock
+end
+
+
+to gpuser-setup-syntax
+  ;; Void ingredients for codeturtle's random code generation
+  ;; This list contains procedures (which do not report a value) that code turtles can use.
+  ;; (They can be either built-in NetLogo primitives or user-defined procedures in this model)
+  set gp-syntaxlist-void (list
+  (list "bullish" TYPE_COMMAND RTYPE_NUMERIC 5)
+  (list "bearish" TYPE_COMMAND RTYPE_NUMERIC 5)
+  (list "if" TYPE_COMMAND RTYPE_BOOLEAN RTYPE_VOIDBLOCK 5)
+  (list "ifelse" TYPE_COMMAND RTYPE_BOOLEAN RTYPE_VOIDBLOCK RTYPE_VOIDBLOCK 5)
+  (list " " TYPE_COMMAND 10) ;; NO OPERATION
+  )
+
+  ;; Numeric ingredients for codeturtle's random code generation
+  ;; This list contains reporters and operators which return numeric values
+  set gp-syntaxlist-numeric (list
+  (list "+" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 5)
+  (list "-" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 5)
+  (list "*" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 5)  ;; weighted less
+  ;(list "safediv" TYPE_REPORTER RTYPE_NUMERIC RTYPE_NUMERIC 1) ;; weighted even less
+  (list "stock-price" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-ma_5" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-ma_20" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-ma_80" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-yield" TYPE_REPORTER RTYPE_NUMERIC 10)  
+  (list "stock-dealed-volume" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-sd" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-p_lin_5" TYPE_REPORTER RTYPE_NUMERIC 10)
+  (list "stock-p_com_5" TYPE_REPORTER RTYPE_NUMERIC 10)  
+  (list "0" TYPE_REPORTER 10)
+  (list "1" TYPE_REPORTER 10)
+  (list "2" TYPE_REPORTER 10)
+  (list "4" TYPE_REPORTER 10)
+  (list "8" TYPE_REPORTER 10)
+  (list "16" TYPE_REPORTER 10)
+
+  ;(list "random-float" TYPE_REPORTER RTYPE_NUMERIC 1) ;; used very infrequently
+  )
+
+  ;; Boolean ingredients for codeturtle's random code generation
+  ;; This list contains reporters and operators which return boolean values
+  set gp-syntaxlist-boolean (list
+  (list "true" TYPE_REPORTER 10)
+  (list "false" TYPE_REPORTER 10)
+;  (list ">" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 10)
+;  (list "<" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 10)
+  (list ">=" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 5)
+  (list "<=" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 5)
+  (list "=" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC  5)
+;  (list "!=" TYPE_OPERATOR RTYPE_NUMERIC RTYPE_NUMERIC 10)
+  (list "and" TYPE_OPERATOR RTYPE_BOOLEAN RTYPE_BOOLEAN 2)
+  (list "or" TYPE_OPERATOR RTYPE_BOOLEAN RTYPE_BOOLEAN 2)  
+  )
+
+end
+
+;; whenever codeturtles are created (at the beginning of each generation) this procedure is run
+to gpuser-initialize-codeturtle
+    set size 1
+    set gp-raw-fitness 100  ; large number (very unfit)
+    ; this color may not always stick, since codeturtles pass color
+    ; from one generation to the next, in a hereditary way (somewhat)
+    set color (who * 10 - 5)
+    ;set xcor ([pxcor] of one-of patches with [ pcolor = green ] ) ; find the start patch
+    ;set ycor ([pycor] of one-of patches with [ pcolor = green ] )
+    ;set heading 0
+    ;; keep track of last xcor, ycor, and heading, so that we can kill off unproductive codeturtles early...
+end
+
+;; This procedure controls what the codeturtles do during a given generation.
+;;
+to gpuser-run-codeturtles 
+  ask codeturtles
+  [
+    let stepnum 0
+    let stepmax 100
+    while [ stepnum < stepmax ]
+    [
+      set stepnum (stepnum + 1)
+      
+      ; the result of running (gp-compiledcode) is a new expectation price 
+      carefully [ run (gp-compiledcode) ] [ print error-message print gp-compiledcode ]
+      
+      gp-calculate-fitness
+      if (gp-raw-fitness < 0.1)
+      [ set shape "face happy"  stop ]
+
+      ;; these are all tricks for speeding up the model, by weeding out codeturtles that we
+      ;; don't think have winning strategies, and keeping the hopeful ones going.
+;      if (stepnum = 200 and gp-raw-fitness < 32)
+;      [ set stepmax 400 ]
+;      if (stepnum = 400 and gp-raw-fitness < 16)
+;      [ set stepmax 600 ]
+
+;      if (xcor = lastx and ycor = lasty and (heading = lasthead or (pcolor = green and stepnum = 5)))
+;        [ set shape "face sad"  stop ]
+;      set lastx xcor
+;      set lasty ycor
+;      set lasthead heading
+    ]
+    set shape "face sad"
+  ]
+end
+
+;; codeturtles procedure
+;; Think of this reporter as "how far am I from my goal?"
+;; Thus, a perfect codeturtle has a raw fitness of 0
+;;       a bad codeturtle has an arbitrarily large raw fitness
+;;
+to gp-calculate-fitness
+  ; we should consider build a fitness function by a combination of these following vars:
+  ; alpha
+  ; beta
+  ; sharp-ratio
+  ; yield-volatility
+  ; information-ratio
+  ; max-drawback
+  ; turnover
+
+  
+  let dist min map [ abs expectation - ? ] test-hist-price
+  ifelse dist < 0.01 
+  [
+    set dist 0
+    ][ 
+    if ( dist < gp-raw-fitness) [ set gp-raw-fitness dist ] 
+  ]
+
+  set gp-fitness 1 / (1 + gp-raw-fitness)
+end

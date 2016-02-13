@@ -6,10 +6,10 @@
 ;;; Adapted to NetLogo 5.1 (2015)
 ;;;
 ;;; Requirements: breeds needed to have following two variables:
-;;; breeds-own [ long-biddings short-biddings ]
+;;; breeds-own [ long-orders short-orders ]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;; long-biddingS
+;;;;;;;;;; long-orders
 ;; There is nothing magical about biddings: they are simply items 
 ;; of a specific list. Check list processing in NetLogo. However
 ;; here are some usefull procedures. 
@@ -31,66 +31,66 @@ end
 
 ;; Adding information to the biddings structure
 to add-long-bidding [bel]
-  if member? bel long-biddings [stop]
-  set long-biddings fput bel long-biddings 
+  if member? bel long-orders [stop]
+  set long-orders fput bel long-orders 
 end 
 ;; Removing a bidding from the list of biddings. 
 to remove-long-bidding [bel]
- set long-biddings remove bel long-biddings 
+ set long-orders remove bel long-orders 
 end 
 
 ;; Adding information to the biddings structure
 to add-short-bidding [bel]
-  if member? bel short-biddings [stop]
-  set short-biddings fput bel short-biddings 
+  if member? bel short-orders [stop]
+  set short-orders fput bel short-orders 
 end 
 ;; Removing a bidding from the list of biddings. 
 to remove-short-bidding [bel]
- set short-biddings remove bel short-biddings 
+ set short-orders remove bel short-orders 
 end 
  
 ;;; return true if a specific bidding belong to the set of biddings
 to-report exists-long-bidding [bel]
-   ifelse member? bel long-biddings [report true] [report false]
+   ifelse member? bel long-orders [report true] [report false]
 end
 ;;; Reports true if a bidding in the form of ["b-type" etc etc etc ...] exist in biddings list
-to-report exist-long-biddings-of-price [b-price]
-  let blfs filter [first ? = b-price] long-biddings
+to-report exist-long-orders-of-price [b-price]
+  let blfs filter [first ? = b-price] long-orders
   ifelse empty? blfs [report false] [report true]
 end
 
 ;;; return true if a specific bidding belong to the set of biddings
 to-report exists-short-bidding [bel]
-   ifelse member? bel short-biddings [report true] [report false]
+   ifelse member? bel short-orders [report true] [report false]
 end
 ;;; Reports true if a bidding in the form of ["b-type" etc etc etc ...] exist in biddings list
-to-report exist-short-biddings-of-price [b-price]
-  let blfs filter [first ? = b-price] short-biddings
+to-report exist-short-orders-of-price [b-price]
+  let blfs filter [first ? = b-price] short-orders
   ifelse empty? blfs [report false] [report true]
 end
 
 ;;; Returns all biddings of b-type in a list
-to-report long-biddings-of-price [b-price]
-  report filter [first ? = b-price] long-biddings
+to-report long-orders-of-price [b-price]
+  report filter [first ? = b-price] long-orders
 end
 
 ;;; Returns all biddings of b-type in a list
-to-report short-biddings-of-price [b-price]
-  report filter [first ? = b-price] short-biddings
+to-report short-orders-of-price [b-price]
+  report filter [first ? = b-price] short-orders
 end
 
 ;;; Returns the first bidding of a certain type and removes it
 to-report get-long-bidding [b-price]
-  ifelse exist-long-biddings-of-price b-price 
-  [let bel first filter [first ? = b-price] long-biddings
+  ifelse exist-long-orders-of-price b-price 
+  [let bel first filter [first ? = b-price] long-orders
    remove-long-bidding bel
    report bel
   ]
   [report false]
 end
 to-report get-short-bidding [b-price]
-  ifelse exist-short-biddings-of-price b-price 
-  [let bel first filter [first ? = b-price] short-biddings
+  ifelse exist-short-orders-of-price b-price 
+  [let bel first filter [first ? = b-price] short-orders
    remove-short-bidding bel
    report bel
   ]
@@ -98,10 +98,10 @@ to-report get-short-bidding [b-price]
 end
 
 to-report read-first-long-bidding-of-price [b-price]
-   report first long-biddings-of-price b-price
+   report first long-orders-of-price b-price
 end 
 to-report read-first-short-bidding-of-price [b-price]
-   report first short-biddings-of-price b-price
+   report first short-orders-of-price b-price
 end 
 
 ;to update-long-bidding [bel]
