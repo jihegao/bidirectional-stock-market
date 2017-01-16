@@ -1,81 +1,73 @@
-; ------------------------------------------------------------------------------------------ 
+; ------------------------------------------------------------------------------------------
 ;
 ; a simplified stock market simulation
 ;
-; 
+;
 ; Author:
 ; Jihe.Gao@jiejiaotech.com
-; 
+;
 ; ------------------------------------------------------------------------------------------
 ; NetLogo requires that the extensions directive resides on the first line of code
-extensions [matrix stats]
+extensions [matrix stats csv web time]
 
 breed [Stocks stock]
 breed [Investors investor]
 
 __includes ["communication.nls" "bidding.nls" "stockexchange.nls" "gp.nls"]
 
-globals [ 
-  global-wealth 
-  initial-wealth-distribution 
-  total-dealed-volume 
-  stock-label-list 
-  stock-xcor-list
-  ]
+globals [
+  global-wealth
+  initial-wealth-distribution
+  h-prices
+  total-dealed-volume
+  dividends  ; intrinsic value, imported by .csv
+  max-networth
+  data
+]
 
 
-turtles-own [
-  incoming-queue            ; for communication
-  ]
+turtles-own [ incoming-queue ]           ; for communication
 
 
 Investors-own [
-  money_initial             ; 
+  informed?
+  money_initial             ;
   money
   networth
+  shares-dealed-tick
   portfolio
-  portfolio-adj
+  watch-agent
   strategy
-  expectations
-  t-back-test               ; the time period to run back test
-  t-real-test               ; the tiem period to run real-time test
+  expectation
+  l-freq       ;learning-frequency - 控制Investor学习时机
+  init-l-freq
 ]
+
+
+
+
 
 to setup
   clear-all
   ask patches [set pcolor black]
-  
-  set stock-label-list ["ETF" "oil-stock" "non-oil-stock" "stock4" "stock5" "stock6" "stock7" "stock8" ]
-  set stock-xcor-list [ -8 -6 -4 -2 0 2 4 6 8 10 12]
 
-  setup-stocks num-stocks
-  
+  setup-stocks 1
+  set gp-current-stock stock 0
+  set h-prices []
+  reset-ticks
+
   set-default-shape turtles "Person"
   setup-investors Investor-population
-  
+
   set global-wealth sum [money] of investors
   ;; temporally remove chooser ""initial-wealth-distribution", to run online demo which cannot read string input
   set initial-wealth-distribution "normal"
   ;;
-  ask investors [ 
-    allocate-money 
-    set networth []
-    set t-real-test 10
-    let random-10-list (list random 10 random 10 random 10 random 10 random 10 random 10 random 10 random 10)
-    set portfolio sublist random-10-list 0 (count stocks) 
-    set portfolio-adj map [? * 0] portfolio
-    ;update-networth    
-    ]
-
-
-  reset-ticks
-end
-
-to generate-stock-historical-prices
-  let tick-count 110
-  while [tick-count > 0] [
-    market-go "generate-price-random"
-    set tick-count tick-count - 1
+  ask investors [
+    allocate-money
+    set l-freq 2 + random 8   ; 1 to 30
+    set init-l-freq l-freq
+    update-networth
   ]
 end
 
@@ -83,189 +75,169 @@ end
 ; run-options:
 ;    - generate-price steps - generate historical prices with previous investing strategy
 ;    - gp-learn             - learning new investing strategy using historical stock prices
-;    - backtest             - back test current strategy's performance using historical stock prices
-;    - realtest             - 
-; 
-to market-go [run-option]
-  
-  ;if tick-count > 0 and ticks > tick-count [stop]  ; set run-number = 0 for no step limit
+;
+to go
+  ; investors procedures
+  update-expectation
+  make-bidding
+
+  ; stock exchange procedures
+  set total-dealed-volume 0
+  ask Stocks [
+    collect-bids-and-make-deal
+    update-stock-tables
+    set h-prices lput price h-prices
+  ]
 
   ; investors procedures
-  update-expectations run-option
-  calculate-portfolio-adj
-  make-bidding
   update-position
   update-networth
 
-  
-  ; stock exchange procedures  
-  set total-dealed-volume 0
-  ask stocks [
-    collect-bids-and-make-deal
-    update-stock-price
+  if ticks >= initial-random-walk-steps [
+    if not any? codeturtles [gp-setup]
+    gp-go
   ]
-  update-market-yield
-
+  if ticks >= length dividends - 1 [stop]
   tick
 end
-
 
 
 ;------------------------------------------------;
 ;----------------- GO SUBRUTINES ----------------;
 ;------------------------------------------------;
-to setup-investors [number-investors] 
+to setup-investors [number-investors]
   create-investors number-investors
   [
-    setxy random-xcor -10
-    set strategy one-of (list "fundamental" "technique")
-    set color one-of [blue red]
+    set color black
+    setxy random-xcor random-ycor
     set incoming-queue []
-    let random-10-list (list random 10 random 10 random 10 random 10 random 10 random 10 random 10 random 10)
-    set expectations sublist random-10-list 0 (count stocks) 
-    set networth [ ]
-  ]
-  
-  update-expectations "generate-price-random"
-end
-
-
-to investor-go-using-gp
-  let tick-count 10
-  while [tick-count > 0] [
-    market-go "gp-employ"
-    set tick-count tick-count - 1
-  ]  
-end
-
-
-to update-expectations [run-option]
-  
-  if run-option = "generate-price-random"  [ 
-    ask Investors [
-      set expectations map [ [price] of ? + random 3 - random 2 ] sort-on [who] Stocks 
-    ]
-  ]
-  
-  if run-option = "gp-learn" [    ; usding gp-code to generate expectations
-    foreach (sort-on [who] Stocks) [ gp-learn-strategy ? ]
+    set expectation [price] of stock 0 + random 10 - random 10
+;    set networth [ ]
   ]
 
-  if run-option = "gp-employ" [
-    ask Investors [
-      let code [expectation] of one-of codeturtles with [ gp-fitness = gp-best-fitness-this-gen ]
-    ]
-  ]
-  
-  
-end
-
-
-to gp-learn-strategy [des-stock]
-  if ticks < 100 [stop]
-  
-  set gp-current-stock des-stock
-  
-  set train-hist-price sublist [hist-price] of gp-current-stock (ticks - 100) (ticks - 10) ; use 0 - 100 to train, 90 - 100 to testify
-  set test-hist-price sublist [hist-price] of gp-current-stock (ticks - 10) ticks   
-  let max-learning-step 20
-  let l-step 0
-  
-  gp-setup
-  set gp-best-fitness-this-gen min [ gp-raw-fitness ] of codeturtles
-  while [(gp-best-fitness-this-gen > 0.1) and (l-step < max-learning-step) ] [
-    ;gp procedure
-    gp-go
-    ask codeturtles [
-      set ycor expectation
-      if expectation - stock-price 10 > max-pycor [ set ycor max-pycor ]
-      if expectation - stock-price 10 < min-pycor [ set ycor min-pycor ]
-    ]
-    
-    set l-step l-step + 1
-  ]
-    
+  ask n-of (noise-ratio / 100 * count investors) investors [ set color white ]
+  ask n-of (%-informed / 100 * count investors with [color != white]) investors with [color != white][set informed? true   set color blue ]
+  ask investors with [color = black][ set informed? false   set color red  ]
+  update-expectation
 end
 
 
 
-
-to calculate-portfolio-adj
-  ; just for test
+to update-expectation
   ask Investors [
-    set portfolio-adj (map [ ifelse-value (?2 > [price] of ?1) [ 1 ][ -1 ] ] 
-      (sort-on [who] Stocks) expectations portfolio )
+    ifelse color = white
+    [ set expectation [ round (intr-value) + random 5 - random 5 ] of stock 0 ]     ; noise investors
+    [
+      ifelse ticks < initial-random-walk-steps + who
+      [ set expectation [price + random 5 - random 5 ] of Stock 0 ]
+      [
+        ifelse (l-freq = 0 or watch-agent = 0) [
+          set l-freq init-l-freq
+          update-strategy
+        ][ set l-freq l-freq - 1 ]
+      if strategy != 0 [ run strategy set expectation round expectation]
+    ] ]
+  ]
+  update-ycor
+end
+
+
+to update-ycor
+  ask Investors [
+    let new-pos expectation / max [expectation] of Investors  * max-pycor * 0.9
+    set ycor ifelse-value (new-pos > 0) [ new-pos] [0]
   ]
 end
+
+
+to update-strategy
+  ask Investors with [color = red][
+    ; uninformed investor can choose strategies without intr-value
+    if any? codeturtles with [not member? "intr-value" gp-compiledcode][
+      set watch-agent min-one-of codeturtles with [not member? "intr-value" gp-compiledcode] [ gp-calculate-fitness [init-l-freq] of myself ]
+      set strategy [gp-compiledcode] of watch-agent
+    ]
+  ]
+  ask Investors with [color = blue][
+    if any? codeturtles [
+      set watch-agent min-one-of codeturtles [ gp-calculate-fitness [init-l-freq] of myself ]
+      set strategy [gp-compiledcode] of watch-agent
+    ]
+  ]
+end
+
+
 
 to update-networth
   ask Investors [
-    set networth lput (money + sum ( map [ ?1 * [price] of ?2 ] portfolio sort stocks )) networth
+    set networth money + portfolio * [price] of stock 0
   ]
+  set max-networth max [networth] of Investors
 end
 
 
 
-
-
-
-;; 
+;;
 to make-bidding
-  
-  ; need to further consider optimized order-price!!!
-  ;
   ask Investors [
-    (foreach (sort-on [who] Stocks) portfolio-adj expectations [
-      if ?2 > 0 
-      [
-        send-order "bl" [who] of ?1 ?3 ?2 ; [ "buy-limit" stock-name bidding-price #share ]
-        set ?2 0
-        ]
-      if ?2 < 0 
-      [
-        send-order "sl" [who] of ?1 ?3 (- ?2) ; [ "sell-limit" stock-name bidding-price #share ]
-        set ?2 0
-        ]
-    ])
+    if (expectation - [price] of stock 0) / [price] of stock 0 > 0.05 and money >= [price] of stock 0 [
+      send-order one-of (list "bl" "bm") 0 (round ([price] of stock 0 + (random abs (expectation - [price] of stock 0)))) 1 ; [ "buy-limit" stock-name order-price #share ]
+    ]
+    if (expectation - [price] of stock 0) / [price] of stock 0 < -0.05 [
+      send-order one-of (list "sl" "sm") 0 (round ([price] of stock 0 - (random abs (expectation - [price] of stock 0)))) 1 ; [ "sell-limit" stock-name order-price #share ]
+    ]
   ]
 end
 
 
-to send-order [performative stock-id bidding-price num-shares]
-  if performative = "bl" [ 
-    let msg add-content (list bidding-price num-shares) create-message "bl" 
+to send-order [performative stock-id order-price num-shares]
+  if performative = "bl" [
+    let msg add-content (list order-price num-shares) create-message "bl"
     send add-receiver stock-id msg
   ]
-  if performative = "sl" [
-    let msg add-content (list bidding-price num-shares) create-message "sl" 
+  if performative = "bm" [  ; buy market order
+    let msg add-content (list order-price  num-shares) create-message "bl"
     send add-receiver stock-id msg
   ]
+  if performative = "sl" [  ; sell limit order
+    let msg add-content (list order-price num-shares) create-message "sl"
+    send add-receiver stock-id msg
+  ]
+  if performative = "sm" [  ; sell market order
+    let msg add-content (list order-price num-shares) create-message "sl"
+    send add-receiver stock-id msg
+  ]
+
 end
 
 
 to update-position
   ask Investors [
+    set shares-dealed-tick 0
     let msg 0
     let performative 0
     while [not empty? incoming-queue]
     [
-       set msg get-message  ;;["buy-order-executed" "sender:2" "content:" [10 1] "receiver:6"]
-       set performative get-performative msg
-       let content get-content msg      ;; [10 1]
-       let dealed-price first content  ;; 10
-       let exchange-informed-dealed-volume last content  ;; 1
-       let s get-sender msg  ;; (who number) 2
-     
-       if performative = "buy-order-executed"
-       [
-         ;replace-item index list value 
-         set portfolio replace-item (read-from-string s) portfolio (item read-from-string s portfolio + exchange-informed-dealed-volume)
-         ]
-       if performative = "sell-order-executed" 
-       [ 
-         set portfolio replace-item (read-from-string s) portfolio (item read-from-string s portfolio - exchange-informed-dealed-volume)
-         ]
-     ]
+      set msg get-message  ;;["buy-order-executed" "sender:2" "content:" [10 1] "receiver:6"]
+      set performative get-performative msg
+      let content get-content msg      ;; [10 1]
+      let dealed-price first content  ;; 10
+      let exchange-informed-dealed-volume last content  ;; 1
+      let s get-sender msg  ;; (who number) 2
+      set shares-dealed-tick shares-dealed-tick + last content
+
+      if performative = "buy-order-executed"
+      [
+        ;replace-item index list value
+        set portfolio portfolio + exchange-informed-dealed-volume
+        set money money - dealed-price * exchange-informed-dealed-volume
+      ]
+      if performative = "sell-order-executed"
+      [
+        set portfolio portfolio - exchange-informed-dealed-volume
+        set money money + dealed-price * exchange-informed-dealed-volume
+      ]
+    ]
   ]
 end
 
@@ -280,37 +252,32 @@ to allocate-money
   if initial-wealth-distribution = "constant" [set money m]
   if initial-wealth-distribution = "normal" [set money round(random-normal m d)]
   if initial-wealth-distribution = "uniform" [set money round( m * 3 / 4 + random-float (1 / 2 * m))]
-  if initial-wealth-distribution = "pareto" [set money round((m * 0.9) / ((random-float 1) ^ (1 / 5)))]  
-  if initial-wealth-distribution = "lognormal" 
+  if initial-wealth-distribution = "pareto" [set money round((m * 0.9) / ((random-float 1) ^ (1 / 5)))]
+  if initial-wealth-distribution = "lognormal"
   [set money round(exp(ln(m) - (1 / 2) * ln(1 + (d / m) ^ 2) + (random-normal 0 1) * (ln(1 + (d / m) ^ 2)) ^ (1 / 2)))]
   set money_initial money
 end
-
-
-to-report total-return [time0]
-  report last networth / (item (ticks - time0) networth)
-end
 @#$#@#$#@
 GRAPHICS-WINDOW
-233
-10
-478
-468
-10
-20
-10.43
+225
+17
+470
+380
+5
+-1
+15.82
 1
 10
 1
 1
 1
 0
+0
+0
 1
-1
-1
--10
-10
--20
+-5
+5
+0
 20
 1
 1
@@ -320,9 +287,9 @@ Períod
 
 BUTTON
 1
-279
+327
 73
-337
+385
 Setup
 Setup
 NIL
@@ -337,12 +304,12 @@ NIL
 
 BUTTON
 75
-279
-179
-338
-generate-prices
-generate-stock-historical-prices
-NIL
+327
+216
+386
+go
+go
+T
 1
 T
 OBSERVER
@@ -353,25 +320,25 @@ NIL
 1
 
 SLIDER
-7
+6
 17
-185
+207
 50
 Investor-population
 Investor-population
 1
 100
-10
+100
 1
 1
 NIL
 HORIZONTAL
 
 PLOT
-757
-11
-1001
-154
+693
+10
+1259
+153
 Price
 NIL
 NIL
@@ -380,23 +347,18 @@ NIL
 0.0
 20.0
 true
-false
-"" ""
+true
+"" "if ticks > 200 [set-plot-x-range (ticks - 200) ticks]"
 PENS
-"default" 1.0 0 -8053223 true "" "plot [price] of first (sort-on [who] stocks)"
-"pen-1" 1.0 0 -955883 true "" "if count stocks > 1 [plot [price] of item 1 (sort-on [who] stocks)]"
-"pen-2" 1.0 0 -14454117 true "" "if count stocks > 2 [plot [price] of item 2 (sort-on [who] stocks)]"
-"pen-3" 1.0 0 -7500403 true "" "if count stocks > 3 [plot [price] of item 3 (sort-on [who] stocks)]"
-"pen-4" 1.0 0 -2674135 true "" "if count stocks > 4 [plot [price] of item 4 (sort-on [who] stocks)]"
-"pen-5" 1.0 0 -6459832 true "" "ifelse ticks > 50 [plot [p_lin_5] of stock 0][plot [price] of stock 0]"
-"pen-6" 1.0 0 -1184463 true "" "ifelse ticks > 50 [plot [p_com_5] of stock 0][plot [price] of stock 0]"
+"price" 1.0 0 -8053223 true "" "plot [price] of Stock 0"
+"intrinsic-value" 1.0 0 -7500403 true "" "plot dividend ticks / r * 100"
 
 PLOT
-758
+693
 150
-1003
-272
-total dealed volume
+1259
+287
+Trading Volume
 NIL
 NIL
 0.0
@@ -404,18 +366,20 @@ NIL
 0.0
 10.0
 true
-false
-"" ""
+true
+"" "if ticks > 200 [set-plot-x-range (ticks - 200) ticks]"
 PENS
-"pen-0" 1.0 0 -7500403 true "" "plot sum [dealed-volume] of stocks"
+"noise-investor" 1.0 0 -7500403 true "" "plot sum [dealed-volume] of stocks"
+"uninformed" 1.0 0 -2674135 true "" "plot sum [shares-dealed-tick] of investors with [color = red]"
+"informed" 1.0 0 -13791810 true "" "plot sum [shares-dealed-tick] of investors with [color = blue]"
 
 BUTTON
-30
-366
-144
-411
-go-gp-learn
-gp-learn-strategy stock 0
+76
+388
+190
+433
+go
+go
 NIL
 1
 T
@@ -428,101 +392,42 @@ NIL
 
 SWITCH
 7
-95
+143
 151
-128
+176
 show_messages?
 show_messages?
 1
 1
 -1000
 
-PLOT
-1002
-12
-1254
-151
-total-market-value
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"total-market-value" 1.0 0 -5298144 true "" "if ticks > 10 \n[plot sum [last networth] of investors]"
-
-PLOT
-1002
-151
-1255
-273
-mean and max of return
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"benchmark-yield-market" 1.0 0 -2674135 true "" "plot market-mean-yield"
-"plot benchmark-yield-max" 1.0 0 -13345367 true "" "plot market-max-yield"
-
 INPUTBOX
 8
-141
+189
 148
-201
+249
 initial-average-wealth
-100
+1000
 1
 0
 Number
 
-OUTPUT
-478
-10
-748
-465
-12
-
-SLIDER
-9
-214
-181
-247
-num-stocks
-num-stocks
-1
-8
-1
-1
-1
-NIL
-HORIZONTAL
-
 INPUTBOX
-937
-297
-1016
-357
+1018
+307
+1097
+367
 randomseed
-1
+2
 1
 0
 Number
 
 SWITCH
-757
-297
-927
-330
+1107
+300
+1277
+333
 fix-random-seed?
 fix-random-seed?
 1
@@ -530,10 +435,10 @@ fix-random-seed?
 -1000
 
 INPUTBOX
-1020
-297
-1119
-357
+913
+306
+1012
+366
 population-size
 10
 1
@@ -541,32 +446,32 @@ population-size
 Number
 
 INPUTBOX
-755
-360
-886
-420
+695
+371
+826
+431
 initial-code-max-depth
-3
+5
 1
 0
 Number
 
 INPUTBOX
-887
-361
-985
-421
+827
+372
+925
+432
 branch-chance
-10
+5
 1
 0
 Number
 
 INPUTBOX
-987
-361
-1077
-421
+927
+372
+1017
+432
 clone-chance
 10
 1
@@ -574,10 +479,10 @@ clone-chance
 Number
 
 INPUTBOX
-1078
-361
-1166
-421
+1018
+372
+1106
+432
 mutate-chance
 10
 1
@@ -585,21 +490,21 @@ mutate-chance
 Number
 
 INPUTBOX
-1167
-360
-1269
-420
+1107
+371
+1209
+431
 crossover-chance
-20
+10
 1
 0
 Number
 
 PLOT
-757
-425
-957
-545
+823
+437
+1023
+557
 Fitness Plot
 NIL
 NIL
@@ -608,18 +513,18 @@ NIL
 0.0
 10.0
 true
-false
-"" ""
+true
+"" "if ticks > 200 [set-plot-x-range (ticks - 200) ticks ]"
 PENS
 "avg" 1.0 0 -16777216 true "" ""
 "best" 1.0 0 -13840069 true "" ""
-"worst" 1.0 0 -7500403 true "" ""
+"worst" 1.0 0 -2674135 true "" ""
 
 BUTTON
-963
-495
-1066
-528
+701
+523
+804
+556
 NIL
 gp-showbest
 NIL
@@ -633,12 +538,12 @@ NIL
 1
 
 BUTTON
-963
-455
-1062
-488
-show code
-clear-output\nask one-of codeturtles [ \n  output-print gp-compiledcode \n  ]
+701
+483
+815
+516
+show all code
+clear-output\nask codeturtles with [length gp-compiledcode > 6][ \n  output-print self \n  output-print gp-compiledcode \n  output-print \"----------\"\n  ]
 NIL
 1
 T
@@ -649,22 +554,236 @@ NIL
 NIL
 1
 
-BUTTON
-30
-422
-177
-455
+MONITOR
+1160
+86
+1259
+131
 NIL
-investor-go-using-gp
-NIL
+[price] of Stock 0
+17
 1
-T
-OBSERVER
+11
+
+PLOT
+426
+16
+686
+136
+investor expectations
 NIL
 NIL
-NIL
-NIL
+0.0
+150.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 1 -16777216 true "" "if ticks > 1 and any? investors [\nset-plot-x-range (min [expectation] of investors)(max[expectation] of investors)\nhistogram [expectation] of Investors\n]"
+
+SLIDER
+6
+87
+208
+120
+%-informed
+%-informed
+0
+100
+39
 1
+1
+NIL
+HORIZONTAL
+
+INPUTBOX
+9
+257
+169
+317
+initial-random-walk-steps
+100
+1
+0
+Number
+
+INPUTBOX
+8
+512
+96
+572
+file-choose
+sh.csv
+1
+0
+String
+
+SWITCH
+1106
+337
+1247
+370
+show-debug?
+show-debug?
+1
+1
+-1000
+
+SLIDER
+6
+52
+207
+85
+noise-ratio
+noise-ratio
+0
+100
+41
+1
+1
+NIL
+HORIZONTAL
+
+INPUTBOX
+693
+307
+815
+367
+max-learning-step
+130
+1
+0
+Number
+
+PLOT
+427
+138
+687
+258
+codeturtle expectations
+NIL
+NIL
+0.0
+150.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 1 -16777216 true "" "if ticks > initial-random-walk-steps and any? codeturtles [\nset-plot-x-range (min [expectation] of codeturtles) (max [expectation] of codeturtles)\nhistogram [expectation] of codeturtles]"
+
+INPUTBOX
+818
+307
+911
+367
+max-popsize
+200
+1
+0
+Number
+
+MONITOR
+695
+435
+818
+480
+NIL
+count codeturtles
+17
+1
+11
+
+PLOT
+426
+260
+687
+380
+networth distribution
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 1 -16777216 true "" "if any? investors [\nset-plot-x-range (min [networth] of investors) (max [networth] of investors)\nhistogram [networth] of investors\n]"
+
+SLIDER
+204
+540
+296
+573
+r
+r
+0.01
+0.1
+0.1
+0.01
+1
+%
+HORIZONTAL
+
+PLOT
+434
+388
+695
+552
+best-yield-by-group
+NIL
+NIL
+0.0
+10.0
+0.0
+1.0
+true
+true
+"" "if ticks > 100 [set-plot-x-range (ticks - 100) ticks]"
+PENS
+"noise-best" 1.0 0 -16777216 true "" "if ticks > 0 [plot max [networth / money_initial] of investors with [color = white]]"
+"uninformed-best" 1.0 0 -2674135 true "" "if ticks > 0 [plot max [networth / money_initial] of investors with [color = red]]"
+"informed-best" 1.0 0 -13345367 true "" "if ticks > 0 [plot max [networth / money_initial] of investors with [color = blue]]"
+"noise-mean" 1.0 0 -9276814 true "" "if ticks > 0 [plot mean [networth / money_initial] of investors with [color = white]]"
+"uninformed-mean" 1.0 0 -1604481 true "" "if ticks > 0 [plot mean [networth / money_initial] of investors with [color = red]]"
+"informed-mean" 1.0 0 -10649926 true "" "if ticks > 0 [plot mean [networth / money_initial] of investors with [color = blue]]"
+
+INPUTBOX
+97
+512
+187
+572
+code
+sh600519
+1
+0
+String
+
+CHOOSER
+5
+466
+194
+511
+data-source
+data-source
+"from-file" "webAPI" "monte-carlo"
+1
+
+INPUTBOX
+196
+388
+434
+531
+cross_fitness_weight
+[0.1 0.1 0.1 0.1 0.1 0.1 0 0 0 0.4\n]
+1
+1
+String
 
 @#$#@#$#@
 ## Where I can find more information?
@@ -982,7 +1101,7 @@ Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 
 @#$#@#$#@
-NetLogo 5.2.0
+NetLogo 5.3.1
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@

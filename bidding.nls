@@ -32,7 +32,8 @@ end
 ;; Adding information to the biddings structure
 to add-long-bidding [bel]
   if member? bel long-orders [stop]
-  set long-orders fput bel long-orders 
+  set long-orders lput bel long-orders 
+  if length long-orders > 200 [set long-orders but-first long-orders]
 end 
 ;; Removing a bidding from the list of biddings. 
 to remove-long-bidding [bel]
@@ -42,7 +43,8 @@ end
 ;; Adding information to the biddings structure
 to add-short-bidding [bel]
   if member? bel short-orders [stop]
-  set short-orders fput bel short-orders 
+  set short-orders lput bel short-orders 
+  if length short-orders > 200 [set short-orders but-first short-orders]
 end 
 ;; Removing a bidding from the list of biddings. 
 to remove-short-bidding [bel]
